@@ -1,0 +1,164 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hybrid-syncer
+  labels:
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/part-of: hybrid-syncer
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hybrid-syncer-controller
+  namespace: hybrid-syncer
+  labels:
+    app.kubernetes.io/component: hybrid-syncer-controller
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/part-of: hybrid-syncer
+
+---
+
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: hybrid-syncer-controller-cluster-access
+  labels:
+    app.kubernetes.io/component: hybrid-syncer-controller
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/part-of: hybrid-syncer
+rules:
+  # Controller needs cluster access to all Run CRs.
+  - apiGroups: ["tekton.dev"]
+    resources: ["runs"]
+    verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
+  - apiGroups: ["tekton.dev"]
+    resources: ["runs/finalizers"]
+    verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
+  - apiGroups: ["tekton.dev"]
+    resources: ["runs/status"]
+    verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
+
+  # Controller needs permission to configure master-election.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
+
+  # Controller needs permission to emit events associated with Run CRs.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "create", "update", "delete", "patch", "watch"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hybrid-syncer-controller-cluster-admin
+  labels:
+    app.kubernetes.io/component: hybrid-syncer-controller
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/part-of: hybrid-syncer
+subjects:
+  - kind: ServiceAccount
+    name: hybrid-syncer-controller
+    namespace: hybrid-syncer
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-logging
+  namespace: hybrid-syncer
+  labels:
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/part-of: hybrid-syncer
+data:
+  # Common configuration for all knative codebase
+  zap-logger-config: |
+    {
+      "level": "info",
+      "development": false,
+      "sampling": {
+        "initial": 100,
+        "thereafter": 100
+      },
+      "outputPaths": ["stdout"],
+      "errorOutputPaths": ["stderr"],
+      "encoding": "json",
+      "encoderConfig": {
+        "timeKey": "",
+        "levelKey": "level",
+        "nameKey": "logger",
+        "callerKey": "caller",
+        "messageKey": "msg",
+        "stacktraceKey": "stacktrace",
+        "lineEnding": "",
+        "levelEncoder": "",
+        "timeEncoder": "",
+        "durationEncoder": "",
+        "callerEncoder": ""
+      }
+    }
+
+  # Log level overrides
+  loglevel.controller: "info"
+  loglevel.webhook: "info"
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hybrid-syncer-controller
+  namespace: hybrid-syncer
+  labels:
+    app.kubernetes.io/name: hybrid-syncer-controller
+    app.kubernetes.io/component: hybrid-syncer-controller
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/version: devel
+    app.kubernetes.io/part-of: hybrid-syncer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hybrid-syncer-controller
+      app.kubernetes.io/component: hybrid-syncer-controller
+      app.kubernetes.io/instance: default
+      app.kubernetes.io/part-of: hybrid-syncer
+  template:
+    metadata:
+      annotations:
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+      labels:
+        app.kubernetes.io/name: hybrid-syncer-controller
+        app.kubernetes.io/component: hybrid-syncer-controller
+        app.kubernetes.io/instance: default
+        app.kubernetes.io/version: devel
+        app.kubernetes.io/part-of: hybrid-syncer
+        app: hybrid-syncer-controller
+    spec:
+      serviceAccountName: hybrid-syncer-controller
+      containers:
+      - name: hybrid-syncer-controller
+        image: ko://github.com/imjasonh/hybrid-syncer
+        volumeMounts:
+        - name: config-logging
+          mountPath: /etc/config-logging
+        env:
+        - name: SYSTEM_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CONFIG_LOGGING_NAME
+          value: config-logging
+      volumes:
+        - name: config-logging
+          configMap:
+            name: config-logging
