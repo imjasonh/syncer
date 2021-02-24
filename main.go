@@ -61,14 +61,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var infs []cache.SharedIndexInformer
 	for _, gvrstr := range []string{
 		"deployments.v1.apps",
 		// TODO: handle gvrs without group (configmaps)
 	} {
 		gvr, _ := schema.ParseResourceArg(gvrstr)
-		inf := dsif.ForResource(*gvr).Informer()
-		inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		dsif.ForResource(*gvr).Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				u, err := interfaceToUnstructured(obj)
 				if err != nil {
@@ -113,13 +111,9 @@ func main() {
 				}
 			},
 		})
-		log.Printf("Running informer for %+v...", *gvr)
-		infs = append(infs, inf)
 	}
 	stopCh := make(chan struct{})
-	for _, inf := range infs {
-		go inf.Run(stopCh)
-	}
+	dsif.Start(stopCh)
 	<-stopCh
 }
 
