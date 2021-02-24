@@ -1,4 +1,4 @@
-module github.com/imjasonh/hybrid-syncer
+module github.com/imjasonh/syncer
 
 go 1.15
 

@@ -1,4 +1,4 @@
-package main // import "github.com/imjasonh/hybrid"
+package main // import "github.com/imjasonh/syncer"
 
 import (
 	"context"
@@ -111,6 +111,7 @@ func main() {
 				}
 			},
 		})
+		log.Printf("Set up informer for %v", gvr)
 	}
 	stopCh := make(chan struct{})
 	dsif.Start(stopCh)
