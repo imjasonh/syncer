@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
@@ -18,10 +21,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-const (
-	resyncPeriod  = time.Hour
-	labelSelector = "cluster=my-cluster"
-)
+const resyncPeriod = time.Hour
 
 var (
 	from = flag.String("from", "from", "Namespace to mirror from")
@@ -52,7 +52,7 @@ func main() {
 
 	dyn := dynamic.NewForConfigOrDie(config)
 	dsif := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, resyncPeriod, *from, func(o *metav1.ListOptions) {
-		//		o.LabelSelector = labelSelector
+		// o.LabelSelector = labelSelector
 	})
 
 	// Create a client to modify "to"
@@ -61,10 +61,34 @@ func main() {
 		log.Fatal(err)
 	}
 
-	for _, gvrstr := range []string{
-		"deployments.v1.apps",
-		// TODO: handle gvrs without group (configmaps)
-	} {
+	dc, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rs, err := dc.ServerResources()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var gvrstrs []string
+	for _, r := range rs {
+		log.Printf("R: %#v", r.GroupVersion)
+		// v1 -> v1.
+		// apps/v1 -> v1.apps
+		// tekton.dev/v1beta1 -> v1beta1.tekton.dev
+		parts := strings.SplitN(r.GroupVersion, "/", 2)
+		vr := parts[0] + "."
+		if len(parts) == 2 {
+			vr = parts[1] + "." + parts[0]
+		}
+		for _, ai := range r.APIResources {
+			if strings.Contains(ai.Name, "/") {
+				// foo/status, pods/exec, namespace/finalize, etc.
+				continue
+			}
+			gvrstrs = append(gvrstrs, fmt.Sprintf("%s.%s", ai.Name, vr))
+		}
+	}
+	for _, gvrstr := range gvrstrs {
 		gvr, _ := schema.ParseResourceArg(gvrstr)
 		dsif.ForResource(*gvr).Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {

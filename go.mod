@@ -15,8 +15,6 @@ require (
 	gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f // indirect
 	gopkg.in/yaml.v2 v2.3.0 // indirect
 	k8s.io/apimachinery v0.20.2
-	k8s.io/client-go v11.0.1-0.20190805182717-6502b5e7b1b5+incompatible
+	k8s.io/client-go v0.20.2
 	knative.dev/pkg v0.0.0-20210130001831-ca02ef752ac6
 )
-
-replace k8s.io/client-go => k8s.io/client-go v0.20.2
