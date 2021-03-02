@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -71,7 +73,6 @@ func main() {
 	}
 	var gvrstrs []string
 	for _, r := range rs {
-		log.Printf("R: %#v", r.GroupVersion)
 		// v1 -> v1.
 		// apps/v1 -> v1.apps
 		// tekton.dev/v1beta1 -> v1beta1.tekton.dev
@@ -85,11 +86,25 @@ func main() {
 				// foo/status, pods/exec, namespace/finalize, etc.
 				continue
 			}
+			if !ai.Namespaced {
+				// Ignore cluster-scoped things.
+				continue
+			}
+			if !contains(ai.Verbs, "watch") {
+				log.Printf("resource %s %s is not watchable: %v", vr, ai.Name, ai.Verbs)
+				continue
+			}
 			gvrstrs = append(gvrstrs, fmt.Sprintf("%s.%s", ai.Name, vr))
 		}
 	}
 	for _, gvrstr := range gvrstrs {
 		gvr, _ := schema.ParseResourceArg(gvrstr)
+
+		if _, err := dsif.ForResource(*gvr).Lister().List(labels.Everything()); err != nil {
+			log.Println("Failed to list all %q: %v", gvrstr, err)
+			continue
+		}
+
 		dsif.ForResource(*gvr).Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				u, err := interfaceToUnstructured(obj)
@@ -100,9 +115,9 @@ func main() {
 				u.SetNamespace(*to)
 				u.SetResourceVersion("")
 				u.SetUID("")
-				log.Printf("Creating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
 
-				if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+				log.Printf("Creating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
+				if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); err != nil && !k8serrors.IsAlreadyExists(err) {
 					log.Printf("ERROR creating: %v", err)
 				}
 			},
@@ -115,8 +130,8 @@ func main() {
 				u.SetNamespace(*to)
 				u.SetResourceVersion("")
 				u.SetUID("")
-				log.Printf("Updating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
 
+				log.Printf("Updating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
 				if _, err := toClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); err != nil {
 					log.Printf("ERROR updating: %v", err)
 				}
@@ -128,9 +143,9 @@ func main() {
 					return
 				}
 				u.SetNamespace(*to)
-				log.Printf("Deleting gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
 
-				if err := toClient.Resource(*gvr).Namespace(*to).Delete(ctx, u.GetName(), metav1.DeleteOptions{}); err != nil {
+				log.Printf("Deleting gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
+				if err := toClient.Resource(*gvr).Namespace(*to).Delete(ctx, u.GetName(), metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) && !k8serrors.IsGone(err) {
 					log.Printf("ERROR deleting: %v", err)
 				}
 			},
@@ -140,6 +155,15 @@ func main() {
 	stopCh := make(chan struct{})
 	dsif.Start(stopCh)
 	<-stopCh
+}
+
+func contains(ss []string, s string) bool {
+	for _, n := range ss {
+		if n == s {
+			return true
+		}
+	}
+	return false
 }
 
 func interfaceToUnstructured(i interface{}) (*unstructured.Unstructured, error) {
