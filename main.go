@@ -117,7 +117,13 @@ func main() {
 				u.SetUID("")
 
 				log.Printf("Creating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
-				if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); err != nil && !k8serrors.IsAlreadyExists(err) {
+				if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); k8serrors.IsAlreadyExists(err) {
+					// Try to update it.
+					log.Printf("Failed to create %q because it already exists; trying to update...", u.GetName())
+					if _, err := toClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); err != nil {
+						log.Printf("ERROR updating after failed create: %v", err)
+					}
+				} else if err != nil {
 					log.Printf("ERROR creating: %v", err)
 				}
 			},
@@ -132,7 +138,13 @@ func main() {
 				u.SetUID("")
 
 				log.Printf("Updating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
-				if _, err := toClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); err != nil {
+				if _, err := toClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); k8serrors.IsNotFound(err) {
+					// Try to create it.
+					log.Printf("Failed to update %q because it was not found; trying to create...", u.GetName())
+					if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+						log.Printf("ERROR creating after failed update: %v", err)
+					}
+				} else if err != nil {
 					log.Printf("ERROR updating: %v", err)
 				}
 			},
