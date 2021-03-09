@@ -18,7 +18,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
@@ -26,44 +25,35 @@ import (
 const resyncPeriod = time.Hour
 
 var (
-	from = flag.String("from", "from", "Namespace to mirror from")
-	to   = flag.String("to", "to", "Namespace to mirror to")
+	kubeconfig = flag.String("kubeconfig", "/etc/kubeconfig/kubeconfig", "Config file for -from cluster")
+	from       = flag.String("from", "from", "Namespace to mirror from")
+	to         = flag.String("to", "to", "Namespace to mirror to")
 )
 
 func main() {
 	flag.Parse()
 	ctx := context.Background()
 
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		log.Fatal(err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
+	// Create a client to dynamically watch "from".
+	//fromConfig, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	fromConfig, err := rest.InClusterConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if *to == "" || *from == "" {
-		log.Fatalf("--to (%q) and --from (%q) must be provided", *to, *from)
+	// Create a client to modify "to".
+	toConfig, err := rest.InClusterConfig()
+	if err != nil {
+		log.Fatal(err)
 	}
-	for _, s := range []string{*to, *from} {
-		if _, err := clientset.CoreV1().Namespaces().Get(ctx, s, metav1.GetOptions{}); err != nil {
-			log.Fatalf("Getting namespace %q: %v", s, err)
-		}
-	}
+	toDynClient := dynamic.NewForConfigOrDie(toConfig)
 
-	dyn := dynamic.NewForConfigOrDie(config)
-	dsif := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, resyncPeriod, *from, func(o *metav1.ListOptions) {
+	fromDynClient := dynamic.NewForConfigOrDie(fromConfig)
+	dsif := dynamicinformer.NewFilteredDynamicSharedInformerFactory(fromDynClient, resyncPeriod, *from, func(o *metav1.ListOptions) {
 		// o.LabelSelector = labelSelector
 	})
 
-	// Create a client to modify "to"
-	toClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	dc, err := discovery.NewDiscoveryClientForConfig(config)
+	dc, err := discovery.NewDiscoveryClientForConfig(fromConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -117,10 +107,10 @@ func main() {
 				u.SetUID("")
 
 				log.Printf("Creating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
-				if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); k8serrors.IsAlreadyExists(err) {
+				if _, err := toDynClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); k8serrors.IsAlreadyExists(err) {
 					// Try to update it.
 					log.Printf("Failed to create %q because it already exists; trying to update...", u.GetName())
-					if _, err := toClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); err != nil {
+					if _, err := toDynClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); err != nil {
 						log.Printf("ERROR updating after failed create: %v", err)
 					}
 				} else if err != nil {
@@ -138,10 +128,10 @@ func main() {
 				u.SetUID("")
 
 				log.Printf("Updating gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
-				if _, err := toClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); k8serrors.IsNotFound(err) {
+				if _, err := toDynClient.Resource(*gvr).Namespace(*to).Update(ctx, u, metav1.UpdateOptions{}); k8serrors.IsNotFound(err) {
 					// Try to create it.
 					log.Printf("Failed to update %q because it was not found; trying to create...", u.GetName())
-					if _, err := toClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); err != nil {
+					if _, err := toDynClient.Resource(*gvr).Namespace(*to).Create(ctx, u, metav1.CreateOptions{}); err != nil {
 						log.Printf("ERROR creating after failed update: %v", err)
 					}
 				} else if err != nil {
@@ -157,7 +147,7 @@ func main() {
 				u.SetNamespace(*to)
 
 				log.Printf("Deleting gvr (%+v), name=%q namespace=%q", gvr, u.GetName(), u.GetNamespace())
-				if err := toClient.Resource(*gvr).Namespace(*to).Delete(ctx, u.GetName(), metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) && !k8serrors.IsGone(err) {
+				if err := toDynClient.Resource(*gvr).Namespace(*to).Delete(ctx, u.GetName(), metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) && !k8serrors.IsGone(err) {
 					log.Printf("ERROR deleting: %v", err)
 				}
 			},
